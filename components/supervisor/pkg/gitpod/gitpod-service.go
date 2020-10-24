@@ -233,6 +233,7 @@ func ConnectToServer(endpoint string, opts ConnectToServerOpts) (*APIoverJSONRPC
 		reqHeader.Set("Authorization", "Bearer "+opts.Token)
 	}
 	ws := &recws.RecConn{
+		NonVerbose:       true,
 		KeepAliveTimeout: 10 * time.Second,
 	}
 	stream := &jsonRPCStream{ws: ws}
@@ -255,6 +256,7 @@ type jsonRPCStream struct {
 func (stream *jsonRPCStream) notifyConnected() error {
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
+	log.WithField("url", stream.ws.GetURL()).Info("connection was successfully established")
 	for _, listener := range stream.connectListeners {
 		close(listener)
 	}
@@ -299,7 +301,7 @@ func (stream *jsonRPCStream) WriteObject(obj interface{}) error {
 		if err == nil {
 			return nil
 		}
-		log.WithError(err).Warn("failed to writer the message to the server websocket, reconnecting...")
+		log.WithError(err).Error("failed to writer the message to the server websocket, reconnecting...")
 	}
 }
 
@@ -315,7 +317,7 @@ func (stream *jsonRPCStream) ReadObject(v interface{}) error {
 		if err == nil {
 			return nil
 		}
-		log.WithError(err).Warn("failed to read the message from the server websocket, reconnecting...")
+		log.WithError(err).Error("failed to read the message from the server websocket, reconnecting...")
 	}
 }
 
@@ -380,7 +382,6 @@ func (gp *APIoverJSONRPC) InstanceUpdates(ctx context.Context, instanceID string
 }
 
 func (gp *APIoverJSONRPC) handler(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) (result interface{}, err error) {
-	log.WithField("req", fmt.Sprintf("%+v", req)).Debug("APIoverJSONRPC handler")
 	if req.Method != FunctionOnInstanceUpdate {
 		return
 	}
