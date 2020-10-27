@@ -27,7 +27,44 @@ var ring0Cmd = &cobra.Command{
 	Hidden: true,
 	Run: func(_ *cobra.Command, args []string) {
 		log := log.WithField("ring", 0)
-		defer log.Info("done")
+
+		var failed bool
+		defer func() {
+			if !failed {
+				return
+			}
+
+			log.Error("ring0 failure -  sleeping five minutes to allow debugging")
+			time.Sleep(5 * time.Minute)
+			os.Exit(1)
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		client, conn, err := supervisor.ConnectToInWorkspaceDaemonService(ctx)
+		if err != nil {
+			log.WithError(err).Error("cannot connect to daemon")
+			return
+		}
+		defer conn.Close()
+
+		_, err = client.PrepareForUserNS(ctx, &daemonapi.PrepareForUserNSRequest{})
+		if err != nil {
+			log.WithError(err).Fatal("cannot prepare for user namespaces")
+			return
+		}
+		defer func() {
+			ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			_, err = client.Teardown(ctx, &daemonapi.TeardownRequest{})
+			if err != nil {
+				log.WithError(err).Error("cannot trigger teardown")
+				failed = true
+				return
+			}
+		}()
 
 		cmd := exec.Command("/proc/self/exe", "ring1")
 		cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -40,18 +77,18 @@ var ring0Cmd = &cobra.Command{
 		cmd.Env = os.Environ()
 
 		if err := cmd.Start(); err != nil {
-			log.WithError(err).Error("failed to start ring0 - sleeping for five minutes to allow debugging")
-			time.Sleep(5 * time.Minute)
-			os.Exit(1)
+			log.WithError(err).Error("failed to start ring0")
+			failed = true
+			return
 		}
 		sigc := sigproxy.ForwardAllSignals(context.Background(), cmd.Process.Pid)
 		defer sigproxysignal.StopCatch(sigc)
 
-		err := cmd.Wait()
+		err = cmd.Wait()
 		if err != nil {
-			log.WithError(err).Error("unexpected exit - sleeping for five minutes to allow debugging")
-			time.Sleep(5 * time.Minute)
-			os.Exit(1)
+			log.WithError(err).Error("unexpected exit")
+			failed = true
+			return
 		}
 	},
 }
@@ -102,24 +139,6 @@ var ring1Cmd = &cobra.Command{
 			failed = true
 			return
 		}
-
-		_, err = client.MountShiftfsMark(ctx, &daemonapi.MountShiftfsMarkRequest{})
-		if err != nil {
-			log.WithError(err).Error("cannot mount shiftfs mark")
-			failed = true
-			return
-		}
-		defer func() {
-			ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-
-			_, err = client.Teardown(ctx, &daemonapi.TeardownRequest{})
-			if err != nil {
-				log.WithError(err).Error("cannot trigger teardown")
-				failed = true
-				return
-			}
-		}()
 
 		cmd := exec.Command("/proc/self/exe", "ring2")
 		cmd.SysProcAttr = &syscall.SysProcAttr{
